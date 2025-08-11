@@ -1,0 +1,132 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: reputai-postgres
+    environment:
+      POSTGRES_DB: reputai
+      POSTGRES_USER: reputai_user
+      POSTGRES_PASSWORD: reputai_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./api/prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - reputai-network
+    restart: unless-stopped
+
+  # Redis pour la file d'attente (prévu)
+  redis:
+    image: redis:7-alpine
+    container_name: reputai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - reputai-network
+    restart: unless-stopped
+
+  # API Backend NestJS
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: reputai-api
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://reputai_user:reputai_password@postgres:5432/reputai
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      AI_MOCK: 1
+      REPLIES_FILE: ./data/ai-replies.json
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+      - ./api/data:/app/data
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - reputai-network
+    restart: unless-stopped
+    command: npm run start:dev
+
+  # Frontend Next.js
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: reputai-web
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+    networks:
+      - reputai-network
+    restart: unless-stopped
+    command: npm run dev -- -p 3001
+
+  # Nginx reverse proxy (optionnel)
+  nginx:
+    image: nginx:alpine
+    container_name: reputai-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+      - web
+    networks:
+      - reputai-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  reputai-network:
+    driver: bridge
+
+# ========================================
+# Instructions d'utilisation
+# ========================================
+# 
+# 1. Démarrer tous les services :
+#    docker-compose up -d
+#
+# 2. Démarrer seulement la base de données :
+#    docker-compose up -d postgres redis
+#
+# 3. Voir les logs :
+#    docker-compose logs -f api
+#
+# 4. Arrêter tous les services :
+#    docker-compose down
+#
+# 5. Nettoyer les volumes :
+#    docker-compose down -v
+#
+# URLs d'accès :
+# - Frontend : http://localhost:3001
+# - API : http://localhost:3000
+# - PostgreSQL : localhost:5432
+# - Redis : localhost:6379
